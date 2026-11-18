@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>作戦ボード</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#111827">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="作戦ボード">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<style>
+  :root{--ink:#111827;--sub:#6b7280;--line:#d1d5db;--blue:#2563eb}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0;overflow:hidden;background:#111827;color:var(--ink);
+    font-family:"Yu Gothic UI","Meiryo","Hiragino Sans",sans-serif;-webkit-user-select:none;user-select:none;touch-action:none}
+  #app{display:flex;flex-direction:column;height:100%}
+  header,footer{background:#fff;padding:8px 12px;display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;justify-content:center}
+  header{border-bottom:1px solid var(--line);padding-top:max(8px,env(safe-area-inset-top))}
+  footer{border-top:1px solid var(--line);padding-bottom:max(8px,env(safe-area-inset-bottom))}
+  .brand{font-weight:800;font-size:17px;margin-right:6px;white-space:nowrap}
+  .group{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center}
+  .lbl{font-size:13px;color:var(--sub);margin-left:6px}
+  button{font:inherit;font-size:16px;padding:8px 13px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:var(--ink);cursor:pointer;touch-action:manipulation}
+  button:active{background:#e5e7eb}
+  button.on{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:700}
+  button.coach.on{background:#7c3aed;border-color:#7c3aed}
+  button:disabled{opacity:.4}
+  .sub{font-size:14px;padding:6px 11px}
+  select.sub{font:inherit;font-size:14px;padding:6px 8px;border-radius:10px;border:1px solid #cbd5e1;background:#fff;color:var(--ink)}
+  .seg{display:flex}
+  .seg button{border-radius:0}
+  .seg button:first-child{border-radius:10px 0 0 10px}
+  .seg button:last-child{border-radius:0 10px 10px 0;border-left:none}
+  #stage{flex:1;min-height:0;position:relative;overflow:hidden;background:#111827}
+  #field{position:absolute;left:0;top:0;width:2000px;height:1520px;transform-origin:0 0;pointer-events:none}
+  #board{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+  .hint{width:100%;text-align:center;color:var(--sub);font-size:12px}
+  .plab{font-weight:800;fill:#fff;text-anchor:middle;dominant-baseline:central;pointer-events:none}
+  @media (max-width:640px){
+    button{font-size:14px;padding:7px 9px}.brand{display:none}.lbl{display:none}
+  }
+</style></head>
+<body>
+<div id="app">
+  <header>
+    <span class="brand">⚾ 作戦ボード</span>
+    <div class="group" id="sits"></div>
+    <div class="group" id="fwdBox" style="display:none">
+      <span class="lbl">三塁走者がいるときの守備：</span>
+      <button class="sub" id="mid">中間守備</button>
+      <button class="sub" id="fwd">前進守備</button>
+    </div>
+  </header>
+  <div id="stage">
+    <svg id="field" viewBox="-100 0 1000 760"></svg>
+    <svg id="board"></svg>
+  </div>
+  <footer>
+    <div class="group">
+      <div class="seg"><button class="sub" id="o0">0アウト</button><button class="sub" id="o1">1アウト</button><button class="sub" id="o2">2アウト</button></div>
+      <div class="seg"><button class="sub" id="hN">定位置</button><button class="sub" id="hR">右打者</button><button class="sub" id="hL">左打者</button></div>
+      <select id="ord" class="sub"></select>
+      <button class="sub" id="full">⛶ 全画面</button>
+    </div>
+    <div class="group">
+      <button id="undo">↶ 1つ戻す</button>
+      <button id="clearA">矢印を消す</button>
+      <button id="reset">↺ 最初に戻す</button>
+    </div>
+    <div class="hint">選手・走者・打者・コーチャー・ボールを指でつかんで動かします。守備を動かすと黄色の矢印、ボールを動かすと黒い点線の矢印が残ります。</div>
+  </footer>
+</div>
+
+<script>
+/* =========================================================
+   座標は「上から見た図」の座標(モデル座標)で管理し、
+   画面には射影変換(上から/斜めから)で映す
+   ========================================================= */
+const HOME=[400,620], APEX=[400,626], MOUND=[400,450];
+const B1=[567,443], B2=[400,260], B3=[233,443];
+const K1POS=[582,504], K3POS=[218,504];
+const PARK3=[70,655], PARK1=[135,655]; /* 待機場所(フィールド外) */
+const fieldEl=document.getElementById('field'), svg=document.getElementById('board'), stage=document.getElementById('stage');
+
+/* ---------- グラウンド ---------- */
+const R=600, FOUL=62, TIP=[400,626+FOUL*Math.SQRT2];
+const ANG=(()=>{const c=TIP[1]-HOME[1];const t=(2*c+Math.sqrt(4*c*c-8*(c*c-R*R)))/4;return Math.atan2(t,HOME[1]-(TIP[1]-t));})();
+const ARC=[];
+for(let t=-ANG;t<=ANG+1e-6;t+=ANG/30) ARC.push([HOME[0]+R*Math.sin(t),HOME[1]-R*Math.cos(t)]);
+function fieldSVG(){
+  const wedge=`M${TIP[0]},${TIP[1].toFixed(1)} L`+ARC.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' L')+' Z';
+  const base=(b,s=22)=>`<rect x="${b[0]-s/2}" y="${b[1]-s/2}" width="${s}" height="${s}" transform="rotate(45 ${b[0]} ${b[1]})" fill="#fff" stroke="#d6d3d1" stroke-width="1.5"/>`;
+  const cbox=(c,rot)=>`<g transform="translate(${c[0]} ${c[1]}) rotate(${rot})"><path d="M-36,13 L-36,-13 L36,-13 L36,13" fill="none" stroke="#fff" stroke-width="3" stroke-linejoin="miter"/></g>`;
+  return `
+  <defs>
+    <pattern id="mow" patternUnits="userSpaceOnUse" width="64" height="64" patternTransform="rotate(45)">
+      <rect width="32" height="64" fill="#5aa22c"/><rect x="32" width="32" height="64" fill="#4a8f22"/>
+    </pattern>
+    <filter id="noise" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <clipPath id="wedge"><path d="${wedge}"/></clipPath>
+    <clipPath id="fair"><polygon points="${APEX} 1506,-480 -706,-480"/></clipPath>
+  </defs>
+  <g clip-path="url(#wedge)">
+    <rect x="-100" y="0" width="1000" height="760" fill="url(#mow)"/>
+    <g clip-path="url(#fair)"><circle cx="400" cy="452" r="228" fill="#c99d5f"/></g>
+    <polygon points="400,298 545,443 400,588 255,443" fill="url(#mow)"/>
+    <circle cx="400" cy="262" r="20" fill="#c99d5f"/>
+    <circle cx="400" cy="612" r="58" fill="#c99d5f"/>
+    <circle cx="400" cy="450" r="30" fill="#c99d5f" stroke="#b78a4f" stroke-width="2"/>
+    <rect x="-100" y="0" width="1000" height="760" filter="url(#noise)" opacity=".16" style="mix-blend-mode:multiply"/>
+    <circle cx="400" cy="620" r="${R-10}" fill="none" stroke="#3b3b3b" stroke-width="22"/>
+  </g>
+  <path d="${wedge}" fill="none" stroke="#262626" stroke-width="4"/>
+  <line x1="${APEX[0]}" y1="${APEX[1]}" x2="827" y2="199" stroke="#fff" stroke-width="3.5"/>
+  <line x1="${APEX[0]}" y1="${APEX[1]}" x2="-27" y2="199" stroke="#fff" stroke-width="3.5"/>
+  <rect x="393" y="447" width="14" height="5" fill="#fff"/>
+  <rect x="349" y="586" width="25" height="54" fill="none" stroke="#fff" stroke-width="3"/>
+  <rect x="426" y="586" width="25" height="54" fill="none" stroke="#fff" stroke-width="3"/>
+  <path d="M388,640 L388,688 L412,688 L412,640" fill="none" stroke="#fff" stroke-width="3"/>
+  ${cbox(K1POS,-45)}${cbox(K3POS,45)}
+  ${base(B1)}${base(B2)}${base(B3)}
+  <polygon points="386,598 414,598 414,612 400,626 386,612" fill="#fff" stroke="#d6d3d1" stroke-width="1.5"/>`;
+}
+fieldEl.innerHTML=fieldSVG();
+
+/* ---------- 射影変換 ---------- */
+function solveH(src,dst){
+  const A=[],b=[];
+  for(let i=0;i<4;i++){const [x,y]=src[i],[u,v]=dst[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]);b.push(u);
+    A.push([0,0,0,x,y,1,-v*x,-v*y]);b.push(v);}
+  const n=8;
+  for(let c=0;c<n;c++){let p=c;for(let r=c+1;r<n;r++)if(Math.abs(A[r][c])>Math.abs(A[p][c]))p=r;
+    [A[c],A[p]]=[A[p],A[c]];[b[c],b[p]]=[b[p],b[c]];
+    for(let r=0;r<n;r++){if(r===c)continue;const f=A[r][c]/A[c][c];for(let k=c;k<n;k++)A[r][k]-=f*A[c][k];b[r]-=f*b[c];}}
+  const h=b.map((v,i)=>v/A[i][i]);return [...h,1];
+}
+const ap=(H,p)=>{const w=H[6]*p[0]+H[7]*p[1]+H[8];return [(H[0]*p[0]+H[1]*p[1]+H[2])/w,(H[3]*p[0]+H[4]*p[1]+H[5])/w];};
+const mul=(A,B)=>{const C=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++){let s=0;for(let k=0;k<3;k++)s+=A[i*3+k]*B[k*3+j];C.push(s);}return C;};
+function inv(m){const [a,b,c,d,e,f,g,h,i]=m,A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g,D=a*A+b*B+c*C;
+  return [A/D,-(b*i-c*h)/D,(b*f-c*e)/D,B/D,(a*i-c*g)/D,-(a*f-c*d)/D,C/D,-(a*h-b*g)/D,(a*e-b*d)/D];}
+
+const SAMPLE=[...ARC,TIP,[PARK3[0]-30,PARK3[1]+30],[-30,199],[830,199],[K1POS[0]+30,K1POS[1]+30],[K3POS[0]-30,K3POS[1]+30]];
+let view='top', H=null, Hi=null, U=1;
+function baseH(){ return [1,0,0,0,1,0,0,0,1]; }
+function layout(){
+  const w=stage.clientWidth, h=stage.clientHeight;
+  const Hb=baseH(), pts=SAMPLE.map(p=>ap(Hb,p));
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  pts.forEach(([x,y])=>{x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);});
+  const pad=view==='top'?6:10, k=Math.min((w-2*pad)/(x1-x0),(h-2*pad)/(y1-y0));
+  const tx=(w-k*(x1-x0))/2-k*x0, ty=(h-k*(y1-y0))/2-k*y0;
+  H=mul([k,0,tx,0,k,ty,0,0,1],Hb); Hi=inv(H);
+  U=ls(MOUND);
+  const E=mul(H,[.5,0,-100,0,.5,0,0,0,1]), n=E[8];
+  const m=E.map(v=>v/n);
+  fieldEl.style.transform=`matrix3d(${m[0]},${m[3]},0,${m[6]},${m[1]},${m[4]},0,${m[7]},0,0,1,0,${m[2]},${m[5]},0,${m[8]})`;
+}
+function ls(p){const a=ap(H,p),b=ap(H,[p[0]+1,p[1]]);return Math.hypot(b[0]-a[0],b[1]-a[1]);}
+
+/* ---------- 状況ごとの基本位置 ---------- */
+const LABEL={P:'投',C:'捕',F1:'一',F2:'二',SS:'遊',F3:'三',LF:'左',CF:'中',RF:'右',BT:'打',R1:'走',R2:'走',R3:'走',K1:'コ',K3:'コ'};
+const DEF_IDS=['P','C','F1','F2','SS','F3','LF','CF','RF'];
+function L(F1,F2,SS,F3,LF,CF,RF){return {F1,F2,SS,F3,LF,CF,RF};}
+const FWD3=L([556,458],[474,398],[326,398],[228,436],[161,165],[400,107],[639,164]);
+const POS={
+  none:L([566,418],[506,308],[303,300],[236,412],[158,164],[400,104],[632,167]),
+  r1:  L([574,434],[486,275],[323,270],[236,412],[161,172],[400,102],[639,169]),
+  r2:  L([566,418],[500,276],[293,284],[236,412],[173,162],[400,108],[638,174]),
+  r12: L([566,418],[503,286],[304,285],[236,412],[160,167],[400,104],[634,166]),
+  r3:  {mid:L([566,418],[486,335],[318,332],[228,436],[171,155],[400,110],[633,166]),fwd:FWD3},
+  r13: {mid:L([566,418],[508,303],[288,307],[228,436],[168,158],[400,107],[634,154]),fwd:FWD3},
+  r23: {mid:L([566,418],[482,350],[318,350],[228,436],[150,175],[400,99],[630,160]),
+        fwd:L([556,458],[474,398],[326,398],[228,436],[156,175],[388,110],[640,165])},
+  rfb: {mid:L([576,380],[491,324],[307,327],[228,436],[162,158],[400,99],[636,166]),
+        fwd:L([540,450],[474,398],[326,398],[228,436],[164,158],[400,105],[641,158])}
+};
+const SITS=[
+  {key:'none',name:'ランナーなし',run:{}},
+  {key:'r1',name:'1塁',run:{R1:[594,458]}},
+  {key:'r2',name:'2塁',run:{R2:[386,300]}},
+  {key:'r12',name:'1・2塁',run:{R1:[552,436],R2:[386,300]}},
+  {key:'r3',name:'3塁',run:{R3:[250,456]},third:true},
+  {key:'r13',name:'1・3塁',run:{R1:[552,436],R3:[250,456]},third:true},
+  {key:'r23',name:'2・3塁',run:{R2:[388,298],R3:[250,456]},third:true},
+  {key:'rfb',name:'満塁',run:{R1:[552,436],R2:[388,298],R3:[250,456]},third:true}
+];
+let cur=SITS[0], fwdMode=false, coachOn=false, hand='N', order=1, outs=0;
+const useFwd=()=>cur.third&&fwdMode&&outs<2;
+
+/* ---------- 打者によるシフト ----------
+   左右：引っ張る方向へ外野と二遊間を寄せる
+   打順：1・2番=バント・足を警戒して前寄り / 3〜5番=長打警戒で後ろ寄り
+         6・7番=基本位置 / 8・9番=外野前進 */
+const HAND_SHIFT={OF:22, MI:10};
+function depthFor(n){
+  if(n<=2) return {mi:6,  corner:18, of:10};
+  if(n<=5) return {mi:-10,corner:-6, of:-28};
+  if(n<=7) return {mi:0,  corner:0,  of:0};
+  return        {mi:6,  corner:6,  of:30};
+}
+function toHome(p,amt){const dx=HOME[0]-p[0],dy=HOME[1]-p[1],d=Math.hypot(dx,dy);return [p[0]+dx/d*amt,p[1]+dy/d*amt];}
+function applyShift(d,sit){
+  if(hand==='N') return;
+  const sx=hand==='R'?-1:1, dep=depthFor(order), holdInf=useFwd();
+  const mv=(id,dx,fw)=>{let p=[d[id][0]+dx,d[id][1]]; if(fw) p=toHome(p,fw); d[id]=p;};
+  ['LF','CF','RF'].forEach(id=>mv(id,sx*HAND_SHIFT.OF,dep.of));
+  ['F2','SS'].forEach(id=>mv(id,sx*HAND_SHIFT.MI,holdInf?0:dep.mi));
+  if(!holdInf&&!sit.run.R1) mv('F1',0,dep.corner);
+  if(!sit.third) mv('F3',0,dep.corner);
+}
+let S=null, hist=[];
+
+/* ---------- アウトカウントによる調整 ----------
+   0アウト=基本位置
+   1アウト=走者が1・2塁側だけのとき、バント警戒をゆるめて一塁手・三塁手を少し下げる
+   2アウト=一塁で確実にアウトを取るため内野を深く。
+           2塁より先に走者がいるときは外野を前に(本塁への送球に備える)。
+           3塁走者がいても前進守備はしない */
+function applyOuts(d,sit){
+  if(outs===0) return;
+  const back=(id,amt)=>{d[id]=toHome(d[id],-amt);}, fwd=(id,amt)=>{d[id]=toHome(d[id],amt);};
+  const runners=Object.keys(sit.run).length>0, scoring=!!(sit.run.R2||sit.run.R3);
+  if(outs===1){
+    if(runners&&!sit.third){ if(!sit.run.R1) back('F1',10); back('F3',10); }
+    return;
+  }
+  ['F2','SS'].forEach(id=>back(id,18));
+  if(!sit.run.R1) back('F1',12);
+  if(!sit.third) back('F3',12);
+  if(scoring) ['LF','CF','RF'].forEach(id=>fwd(id,20));
+}
+function build(){
+  const sit=cur, p=POS[sit.key], o=sit.third?(useFwd()?p.fwd:p.mid):p;
+  const d=Object.assign({P:[400,450],C:[400,655]},o);
+  applyShift(d,sit);
+  applyOuts(d,sit);
+  const ents={};
+  DEF_IDS.forEach(id=>ents[id]={x:d[id][0],y:d[id][1],k:'def'});
+  Object.keys(sit.run).forEach(id=>ents[id]={x:sit.run[id][0],y:sit.run[id][1],k:'run'});
+  ents.BT={x:hand==='L'?438:362,y:612,k:'bat'};
+  addCoaches(ents);
+  ents.BALL={x:400,y:607,k:'ball'};
+  S={ents,arrows:[]}; hist=[]; render(); updateUI();
+}
+function addCoaches(ents){ents.K3={x:PARK3[0],y:PARK3[1],k:'coach'};ents.K1={x:PARK1[0],y:PARK1[1],k:'coach'};}
+
+/* ---------- 描画 ---------- */
+const COL={def:'#2563eb',run:'#dc2626',bat:'#f97316',coach:'#7c3aed'};
+const ORDER=[...DEF_IDS,'K1','K3','R1','R2','R3','BT','BALL'];
+function geom(id,e){
+  const f=ap(H,[e.x,e.y]);
+  const base=e.k==='ball'?15:25;
+  let sc=view==='top'?U:Math.max(U*.72,Math.min(U*1.3,ls([e.x,e.y])));
+  const r=base*sc, lift=view==='top'?0:r*.95;
+  return {fx:f[0],fy:f[1],cx:f[0],cy:f[1]-lift,r};
+}
+function ballArrowSVG(a){
+  const A=ap(H,a.from), B=ap(H,a.to);
+  const dx=B[0]-A[0], dy=B[1]-A[1], d=Math.hypot(dx,dy); if(d<3) return '';
+  const u=U, ux=dx/d, uy=dy/d, nx=-uy, ny=ux;
+  const s0=Math.min(16*u,d*.25), e0=Math.min(18*u,d*.3);
+  const sx=A[0]+ux*s0, sy=A[1]+uy*s0, tx=B[0]-ux*e0, ty=B[1]-uy*e0;
+  const hl=Math.min(18*u,Math.hypot(tx-sx,ty-sy)*.6), hw=16*u, bx=tx-ux*hl, by=ty-uy*hl;
+  return `<g><line x1="${sx}" y1="${sy}" x2="${bx}" y2="${by}" stroke="#fff" stroke-opacity=".55" stroke-width="${7*u}" stroke-linecap="round"/>
+    <line x1="${sx}" y1="${sy}" x2="${bx}" y2="${by}" stroke="#000" stroke-width="${4*u}" stroke-dasharray="${9*u} ${7*u}"/>
+    <polygon points="${tx},${ty} ${bx+nx*hw/2},${by+ny*hw/2} ${bx-nx*hw/2},${by-ny*hw/2}" fill="#000" stroke="#fff" stroke-opacity=".55" stroke-width="${1.5*u}"/></g>`;
+}
+function arrowSVG(a){
+  if(a.ball) return ballArrowSVG(a);
+  const A=ap(H,a.from), B=ap(H,a.to);
+  const dx=B[0]-A[0], dy=B[1]-A[1], d=Math.hypot(dx,dy); if(d<3) return '';
+  const u=U, ux=dx/d, uy=dy/d, nx=-uy, ny=ux;
+  const s0=Math.min(26*u,d*.3), e0=Math.min(32*u,d*.4);
+  const sx=A[0]+ux*s0, sy=A[1]+uy*s0, tx=B[0]-ux*e0, ty=B[1]-uy*e0;
+  const rest=Math.hypot(tx-sx,ty-sy), hl=Math.min(36*u,rest*.7), hw=30*u;
+  const bx=tx-ux*hl, by=ty-uy*hl;
+  const head=`${tx},${ty} ${bx+nx*hw/2},${by+ny*hw/2} ${bx-nx*hw/2},${by-ny*hw/2}`;
+  return `<g stroke-linecap="round" stroke-linejoin="round">
+    <line x1="${sx}" y1="${sy}" x2="${bx}" y2="${by}" stroke="#1f2937" stroke-width="${16*u}"/>
+    <polygon points="${head}" fill="#1f2937" stroke="#1f2937" stroke-width="${8*u}"/>
+    <line x1="${sx}" y1="${sy}" x2="${bx}" y2="${by}" stroke="#facc15" stroke-width="${9*u}"/>
+    <polygon points="${head}" fill="#facc15"/></g>`;
+}
+function shadow(g){return view==='top'?'':`<ellipse cx="${g.fx}" cy="${g.fy}" rx="${g.r*.8}" ry="${g.r*.3}" fill="#000" opacity=".35"/>`;}
+function entSVG(id,e,drag){
+  const g=geom(id,e), s=drag?1.15:1, r=g.r*s;
+  let out=shadow(g);
+  if(e.k==='ball'){
+    return out+`<g transform="translate(${g.cx} ${g.cy}) scale(${r/15})">${drag?'<circle r="26" fill="#facc15" opacity=".5"/>':''}
+      <circle r="15" fill="#fff" stroke="#111827" stroke-width="3"/>
+      <path d="M-9,-9 Q-3,0 -9,9 M9,-9 Q3,0 9,9" fill="none" stroke="#dc2626" stroke-width="2.4"/></g>`;
+  }
+  return out+`<g transform="translate(${g.cx} ${g.cy})">${drag?`<circle r="${r*1.6}" fill="#facc15" opacity=".45"/>`:''}
+    <circle r="${r}" fill="${COL[e.k]}" stroke="#fff" stroke-width="${r*.14}"/>
+    <text class="plab" style="font-size:${r*1.04}px">${LABEL[id]}</text></g>`;
+}
+function ghostSVG(id,from){
+  const g=geom(id,{x:from[0],y:from[1],k:'def'});
+  return `<g opacity=".4">${shadow(g)}<g transform="translate(${g.cx} ${g.cy})"><circle r="${g.r}" fill="#2563eb" stroke="#fff" stroke-width="${g.r*.12}" stroke-dasharray="${g.r*.24} ${g.r*.2}"/><text class="plab" style="font-size:${g.r*1.04}px">${LABEL[id]}</text></g></g>`;
+}
+let dragId=null, liveArrow=null;
+function render(){
+  if(!H||!S) return;
+  const all=liveArrow?[...S.arrows,liveArrow]:S.arrows;
+  let out=all.filter(a=>!a.ball).map(a=>ghostSVG(a.id,a.from)).join('')+all.map(arrowSVG).join('');
+  const ids=ORDER.filter(id=>S.ents[id]);
+  if(view==='3d') ids.sort((a,b)=>S.ents[a].y-S.ents[b].y);
+  out+=ids.map(id=>entSVG(id,S.ents[id],id===dragId)).join('');
+  svg.innerHTML=out;
+}
+
+/* ---------- 操作(ドラッグ) ---------- */
+function toLocal(ev){const r=svg.getBoundingClientRect();return [ev.clientX-r.left,ev.clientY-r.top];}
+function pick(pt){
+  let best=null,bd=1e9;
+  ORDER.forEach(id=>{const e=S.ents[id]; if(!e) return;
+    const g=geom(id,e), lim=Math.max(22,g.r*1.6), d=Math.hypot(g.cx-pt[0],g.cy-pt[1]);
+    if(d<lim&&d<bd){bd=d;best=id;}});
+  return best;
+}
+let drag=null;
+svg.addEventListener('pointerdown',ev=>{
+  if(drag) return;
+  const pt=toLocal(ev), id=pick(pt); if(!id) return;
+  const e=S.ents[id], g=geom(id,e);
+  drag={id,pid:ev.pointerId,from:[e.x,e.y],off:[g.fx-pt[0],g.fy-pt[1]],snap:JSON.stringify(S)};
+  dragId=id; svg.setPointerCapture(ev.pointerId); ev.preventDefault(); render();
+});
+svg.addEventListener('pointermove',ev=>{
+  if(!drag||ev.pointerId!==drag.pid) return;
+  const pt=toLocal(ev), e=S.ents[drag.id];
+  const m=ap(Hi,[pt[0]+drag.off[0],pt[1]+drag.off[1]]);
+  e.x=Math.max(-70,Math.min(870,m[0])); e.y=Math.max(15,Math.min(715,m[1]));
+  const mk=e.k==='def'||e.k==='ball';
+  liveArrow=(mk&&Math.hypot(e.x-drag.from[0],e.y-drag.from[1])>=30)?{id:drag.id,from:drag.from,to:[e.x,e.y],ball:e.k==='ball'}:null;
+  render(); ev.preventDefault();
+});
+function endDrag(ev){
+  if(!drag||ev.pointerId!==drag.pid) return;
+  const e=S.ents[drag.id], moved=Math.hypot(e.x-drag.from[0],e.y-drag.from[1]);
+  if(moved>=4){
+    hist.push(drag.snap);
+    if((e.k==='def'||e.k==='ball')&&moved>=30) S.arrows.push({id:drag.id,from:drag.from,to:[e.x,e.y],ball:e.k==='ball'});
+  }
+  drag=null; dragId=null; liveArrow=null; render(); updateUI();
+}
+svg.addEventListener('pointerup',endDrag);
+svg.addEventListener('pointercancel',endDrag);
+svg.addEventListener('contextmenu',e=>e.preventDefault());
+
+/* ---------- ボタン ---------- */
+const $=id=>document.getElementById(id);
+const sits=$('sits');
+SITS.forEach(s=>{const b=document.createElement('button');b.textContent=s.name;b.dataset.key=s.key;
+  b.onclick=()=>{cur=s;build();};sits.appendChild(b);});
+[0,1,2].forEach(n=>$('o'+n).onclick=()=>{outs=n;build();});
+$('hN').onclick=()=>{hand='N';build();};
+$('hR').onclick=()=>{hand='R';build();};
+$('hL').onclick=()=>{hand='L';build();};
+const ordSel=$('ord');
+for(let i=1;i<=9;i++){const o=document.createElement('option');o.value=i;o.textContent=`打順 ${i}番`;ordSel.appendChild(o);}
+ordSel.onchange=()=>{order=+ordSel.value;build();};
+$('mid').onclick=()=>{fwdMode=false;build();};
+$('fwd').onclick=()=>{fwdMode=true;build();};
+$('undo').onclick=()=>{if(!hist.length)return;S=JSON.parse(hist.pop());render();updateUI();};
+$('clearA').onclick=()=>{if(!S.arrows.length)return;hist.push(JSON.stringify(S));S.arrows=[];render();updateUI();};
+$('reset').onclick=()=>build();
+const fullBtn=$('full');
+if(!document.documentElement.requestFullscreen) fullBtn.style.display='none';
+fullBtn.onclick=()=>{try{if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen();}catch(e){}};
+function updateUI(){
+  [...sits.children].forEach(b=>b.classList.toggle('on',b.dataset.key===cur.key));
+  $('fwdBox').style.display=(cur.third&&outs<2)?'flex':'none';
+  [0,1,2].forEach(n=>$('o'+n).classList.toggle('on',outs===n));
+  $('mid').classList.toggle('on',!fwdMode); $('fwd').classList.toggle('on',fwdMode);
+  $('hN').classList.toggle('on',hand==='N'); ordSel.disabled=hand==='N';
+  $('hR').classList.toggle('on',hand==='R'); $('hL').classList.toggle('on',hand==='L');
+  $('undo').disabled=!hist.length; $('clearA').disabled=!S.arrows.length;
+}
+function relayout(){layout();render();}
+if(window.ResizeObserver) new ResizeObserver(relayout).observe(stage); else window.addEventListener('resize',relayout);
+layout(); build();
+if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}
+if(matchMedia('(display-mode: standalone)').matches||navigator.standalone) document.getElementById('full').style.display='none';
+</script>
+</body></html>
